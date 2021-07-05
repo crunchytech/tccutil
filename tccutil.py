@@ -23,7 +23,7 @@ from distutils.version import StrictVersion as version
 util_name = os.path.basename(sys.argv[0])
 
 # Utility Version
-util_version = '1.2.10'
+util_version = '1.3'
 
 # Current OS X version
 osx_version = version(mac_ver()[0])  # mac_ver() returns 10.16 for Big Sur instead 11.+
@@ -53,6 +53,11 @@ parser.add_argument(
     '--service', '-s',
     default=service,
     help="Set TCC service"
+)
+parser.add_argument(
+    '--database', '-db',
+    default=tcc_db,
+    help="Set database path (if not default)"
 )
 parser.add_argument(
     '--list', '-l', action='store_true',
@@ -294,6 +299,9 @@ def main():
 
     global service
     service = args.service
+
+    global tcc_db
+    tcc_db = args.database
 
     if args.verbose:
         # If verbose option is set, set verbose to True and remove all verbose arguments.
