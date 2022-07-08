@@ -17,13 +17,13 @@ import sys
 import os
 import hashlib
 from platform import mac_ver
-from distutils.version import StrictVersion as version
+from packaging.version import Version as version
 
 # Utility Name
 util_name = os.path.basename(sys.argv[0])
 
 # Utility Version
-util_version = '1.3'
+util_version = '1.2.13'
 
 # Current OS X version
 osx_version = version(mac_ver()[0])  # mac_ver() returns 10.16 for Big Sur instead 11.+
@@ -64,6 +64,10 @@ parser.add_argument(
     help="List all entries in the accessibility database."
 )
 parser.add_argument(
+     '--digest', action='store_true',
+     help="Print the digest hash of the accessibility database."
+ )
+parser.add_argument(
     '--insert', '-i', action='append', default=[],
     help="Adds the given bundle ID or path to the accessibility database.",
 )
@@ -88,7 +92,6 @@ parser.add_argument(
     help="Show the version of this script",
 )
 
-
 def display_version():
     """Print the version of this utility."""
     print("%s %s" % (util_name, util_version))
@@ -103,7 +106,18 @@ def sudo_required():
         display_help(1)
 
 
-def open_database():
+def digest_check(digest_to_check):
+     """Validates that a digest for the table is one that can be used with tccutil."""
+     # Do a sanity check that TCC access table has expected structure
+     accessTableDigest = ""
+     for row in digest_to_check.fetchall():
+        accessTableDigest = hashlib.sha1(row[0].encode('utf-8')).hexdigest()[0:10]
+        break
+
+     return accessTableDigest
+
+
+def open_database(digest=False):
     """Open the database for editing values."""
     sudo_required()
     global conn
@@ -122,11 +136,12 @@ def open_database():
         c = conn.cursor()
 
         # Do a sanity check that TCC access table has expected structure
-        c.execute("SELECT sql FROM sqlite_master WHERE name='access' and type='table'")
-        accessTableDigest = ""
-        for row in c.fetchall():
-            accessTableDigest = hashlib.sha1(row[0]).hexdigest()[0:10]
-            break
+        accessTableDigest = digest_check(c.execute("SELECT sql FROM sqlite_master WHERE name='access' and type='table'"))
+
+        if digest:
+          print(accessTableDigest)
+          sys.exit(0)
+
         # check if table in DB has expected structure:
         if not (accessTableDigest == "8e93d38f7c" or  # prior to El Capitan
                 # El Capitan , Sierra, High Sierra
@@ -137,8 +152,8 @@ def open_database():
                     accessTableDigest in ["ecc443615f", "80a4bb6912"]) or
                 # Big Sur and later
                 (osx_version >= version('10.16') and
-                    accessTableDigest == "3d1c2a0e97")):
-            print("TCC Database structure is unknown.")
+                   accessTableDigest in ["3d1c2a0e97", "cef70648de"])):
+            print("TCC Database structure is unknown (%s)" % accessTableDigest)
             sys.exit(1)
 
         verbose_output("Database opened.\n")
@@ -226,8 +241,11 @@ def insert_client(client):
     verbose_output("Inserting \"%s\" into Database..." % (client))
     # Big Sur and later
     if osx_version >= version('10.16'):
-        c.execute("INSERT or REPLACE INTO access VALUES('%s','%s',%s,2,4,1,NULL,NULL,0,'UNUSED',NULL,0,0)"
-                  % (service, client, client_type))
+        try:
+          c.execute("INSERT or REPLACE INTO access VALUES('%s','%s',%s,2,4,1,NULL,NULL,0,'UNUSED',NULL,0,0)"
+                    % (service, client, client_type))
+        except sqlite3.OperationalError:
+          print("Attempting to write a readonly database.  You probably need to disable SIP.")
     # Mojave through Big Sur
     elif osx_version >= version('10.14'):
         c.execute("INSERT or REPLACE INTO access VALUES('%s','%s',%s,1,1,NULL,NULL,NULL,'UNUSED',NULL,0,0)"
@@ -247,7 +265,10 @@ def delete_client(client):
     """Remove a client from the database."""
     open_database()
     verbose_output("Removing \"%s\" from Database..." % (client))
-    c.execute("DELETE from access where client IS '%s' AND service IS '%s'" % (client, service))
+    try:
+      c.execute("DELETE from access where client IS '%s' AND service IS '%s'" % (client, service))
+    except sqlite3.OperationalError:
+      print("Attempting to write a readonly database.  You probably need to disable SIP.")
     commit_changes()
 
 
@@ -259,7 +280,10 @@ def enable(client):
     # right away (without closing the window).
     # Set to 1 to enable the client.
     enable_mode_name = 'auth_value' if osx_version >= version('10.16') else 'allowed'
-    c.execute("UPDATE access SET %s='1' WHERE client='%s' AND service IS '%s'" % (enable_mode_name, client, service))
+    try:
+      c.execute("UPDATE access SET %s='1' WHERE client='%s' AND service IS '%s'" % (enable_mode_name, client, service))
+    except sqlite3.OperationalError:
+      print("Attempting to write a readonly database.  You probably need to disable SIP.")
     commit_changes()
 
 
@@ -271,7 +295,10 @@ def disable(client):
     # right away (without closing the window).
     # Set to 0 to disable the client.
     enable_mode_name = 'auth_value' if osx_version >= version('10.16') else 'allowed'
-    c.execute("UPDATE access SET %s='0' WHERE client='%s' AND service IS '%s'" % (enable_mode_name, client, service))
+    try:
+      c.execute("UPDATE access SET %s='0' WHERE client='%s' AND service IS '%s'" % (enable_mode_name, client, service))
+    except sqlite3.OperationalError:
+      print("Attempting to write a readonly database.  You probably need to disable SIP.")
     commit_changes()
 
 
@@ -307,6 +334,9 @@ def main():
         # If verbose option is set, set verbose to True and remove all verbose arguments.
         global verbose
         verbose = True
+
+    if args.digest:
+         open_database(digest=True)
 
     if args.list:
         list_clients()
